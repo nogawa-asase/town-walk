@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>府中ぐるり</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --ink: #1d2a24;
+    --sub: #5d6b64;
+    --paper: #f7f8f5;
+    --line: #d9ded6;
+    --walked: #2f9e6f;
+    --walked-dark: #1b6b4a;
+    --open: #3b5b8c;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column;
+    height: 100dvh;
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif;
+    color: var(--ink); background: var(--paper);
+  }
+
+  header {
+    padding: calc(10px + var(--safe-top)) 16px 10px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+  }
+  .head-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .count { font-variant-numeric: tabular-nums; }
+  .count b { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+  .count span { font-size: 14px; color: var(--sub); margin-left: 4px; }
+  .pct { font-size: 20px; font-weight: 700; color: var(--walked-dark); font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; margin-top: 8px; background: #e4e9e1; border-radius: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--walked); transition: width .3s ease; }
+  .sub { margin-top: 6px; font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums; }
+
+  .town { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); cursor: pointer; }
+  .town:focus-visible { outline: 3px solid #f0b429; outline-offset: 2px; }
+  .town-name { font-size: 16px; font-weight: 700; }
+  .town-pct { font-size: 16px; font-weight: 700; color: var(--walked-dark); font-variant-numeric: tabular-nums; }
+  .town .bar { height: 6px; margin-top: 6px; }
+
+  #stage { position: relative; flex: 1; min-height: 0; }
+  #map { position: absolute; inset: 0; background: #e8ece6; }
+
+  .tools {
+    position: absolute; left: 10px; bottom: calc(14px + var(--safe-bottom)); z-index: 1000;
+    display: flex; gap: 8px;
+  }
+  .tools button, .sheet button, .popup-body button {
+    font: inherit; color: var(--ink); background: #fff;
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 14px; min-height: 40px; cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,.12);
+  }
+  .tools button:focus-visible, .sheet button:focus-visible, .popup-body button:focus-visible,
+  .popup-body input:focus-visible { outline: 3px solid #f0b429; outline-offset: 2px; }
+  .tools button:active, .sheet button:active { background: #eef2ec; }
+
+  .leaflet-bottom.leaflet-right { margin-bottom: var(--safe-bottom); }
+
+  /* 履歴・データのシート */
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1100;
+    max-height: 70%; display: none; flex-direction: column;
+    background: var(--paper); border-top: 1px solid var(--line);
+    border-radius: 14px 14px 0 0; box-shadow: 0 -4px 16px rgba(0,0,0,.18);
+    padding-bottom: var(--safe-bottom);
+  }
+  .sheet.open { display: flex; }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .sheet-head h2 { margin: 0; font-size: 16px; }
+  .sheet-body { overflow-y: auto; padding: 4px 16px 16px; }
+
+  .day { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .day h3 { margin: 0 0 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .day h3 small { color: var(--sub); font-weight: 400; margin-left: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { padding: 5px 10px; min-height: 32px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--sub); font-size: 14px; padding: 16px 0; line-height: 1.7; }
+  .data-actions { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+  .data-actions p { margin: 0; font-size: 13px; color: var(--sub); line-height: 1.6; }
+
+  /* エリアのポップアップ */
+  .popup-body { min-width: 190px; font-family: inherit; }
+  .popup-body h4 { margin: 0 0 2px; font-size: 15px; }
+  .popup-body .meta { margin: 0 0 10px; font-size: 12px; color: var(--sub); }
+  .popup-body label { display: block; font-size: 12px; color: var(--sub); margin-bottom: 4px; }
+  .popup-body input[type=date] {
+    width: 100%; font: inherit; font-size: 16px; padding: 8px; margin-bottom: 10px;
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .popup-body button { width: 100%; box-shadow: none; }
+
+  .toast {
+    position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+    z-index: 1200; background: var(--ink); color: #fff; font-size: 13px;
+    padding: 8px 14px; border-radius: 8px; max-width: 90%;
+    opacity: 0; pointer-events: none; transition: opacity .2s ease;
+  }
+  .toast.show { opacity: 1; }
+
+  .loading {
+    position: absolute; inset: 0; z-index: 1500; display: flex; align-items: center; justify-content: center;
+    background: rgba(247,248,245,.92); padding: 24px; text-align: center; line-height: 1.8; font-size: 14px;
+  }
+  .loading code { background: #e9ede6; padding: 1px 6px; border-radius: 4px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar i, .toast { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="head-row">
+    <div class="count"><b id="done">0</b><span>/ <span id="total" style="margin-left:0">0</span> エリア</span></div>
+    <div class="pct" id="pct">0.0%</div>
+  </div>
+  <div class="bar" role="progressbar" aria-label="歩いたエリアの割合" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar"><i id="barfill"></i></div>
+  <div class="sub" id="sub"></div>
+  <div class="town" id="town" hidden role="button" tabindex="0" title="タップで町丁目の範囲へ移動" aria-label="最後に塗った町丁目の範囲へ移動">
+    <div class="head-row">
+      <div class="town-name" id="town-name"></div>
+      <div class="town-pct" id="town-pct"></div>
+    </div>
+    <div class="bar" role="progressbar" aria-label="最後に塗った町丁目の割合" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="town-bar"><i id="town-fill"></i></div>
+    <div class="sub" id="town-sub"></div>
+  </div>
+</header>
+
+<div id="stage">
+  <div id="map"></div>
+
+  <div class="tools">
+    <button id="btn-history" type="button">履歴</button>
+    <button id="btn-locate" type="button">現在地</button>
+    <button id="btn-data" type="button">データ</button>
+  </div>
+
+  <section class="sheet" id="sheet-history" aria-label="歩いた履歴">
+    <div class="sheet-head"><h2>歩いた履歴</h2><button type="button" data-close>閉じる</button></div>
+    <div class="sheet-body" id="history-body"></div>
+  </section>
+
+  <section class="sheet" id="sheet-data" aria-label="データの保存と読み込み">
+    <div class="sheet-head"><h2>データ</h2><button type="button" data-close>閉じる</button></div>
+    <div class="sheet-body">
+      <div class="data-actions">
+        <p>記録はこのブラウザに保存されます。スマホとPCで共有したいときや、バックアップには書き出しを使ってください。</p>
+        <button type="button" id="btn-export">記録を書き出す（JSON）</button>
+        <button type="button" id="btn-import">記録を読み込む</button>
+        <p>読み込みは、いまの記録に追加されます。同じエリアは読み込んだ日付になります。</p>
+        <input type="file" id="file-import" accept="application/json,.json" hidden>
+      </div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="loading" id="loading">地図を読み込み中…</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+  const GEOJSON_URL = 'fuchu_areas.geojson';
+  const STORE_KEY = 'fuchu-walk-v1';
+  const LAST_KEY = 'fuchu-walk-last-v1';   // 最後に塗ったエリアのID
+  const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
+
+  // ---- 記録（{ エリアID: 'YYYY-MM-DD' }） ----
+  let walked = loadWalked();
+  let lastId = (() => { try { return localStorage.getItem(LAST_KEY) || ''; } catch (e) { return ''; } })();
+  function loadWalked() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function saveWalked() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(walked));
+      localStorage.setItem(LAST_KEY, lastId || '');
+    }
+    catch (e) { toast('保存できませんでした。ブラウザの設定を確認してください'); }
+  }
+
+  const pad = n => String(n).padStart(2, '0');
+  function today() {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  function formatDate(s) {
+    const [y, m, d] = s.split('-').map(Number);
+    const w = WEEK[new Date(y, m - 1, d).getDay()];
+    return `${y}年${m}月${d}日（${w}）`;
+  }
+
+  // ---- 画面部品 ----
+  const $ = id => document.getElementById(id);
+  let toastTimer;
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+  }
+
+  // ---- 地図 ----
+  const map = L.map('map', { preferCanvas: true, zoomControl: false, maxZoom: 19 });
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+  L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+    maxNativeZoom: 18, maxZoom: 19,
+    attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>'
+  }).addTo(map);
+  map.setView([35.669, 139.478], 13);
+
+  const layers = new Map();   // id(文字列) -> Leaflet layer
+  const areas = new Map();    // id(文字列) -> 面積(m²)
+  let totalArea = 0;
+  const townOf = new Map();   // エリアID -> 町丁目名
+  const townIds = new Map();  // 町丁目名 -> エリアIDの配列
+  const townShapes = new Map(); // 町丁目名 -> 範囲のGeoJSON Feature（fuchu_towns.geojson）
+  let outline = null;         // 地図に出している町丁目の枠
+  let outlineTown = null;
+  let shownTown = null;       // 画面上部に表示中の町丁目
+
+  function styleFor(id) {
+    return walked[id]
+      ? { color: '#1b6b4a', weight: 1, opacity: 0.9, fillColor: '#2f9e6f', fillOpacity: 0.55 }
+      : { color: '#3b5b8c', weight: 1, opacity: 0.65, fillColor: '#3b5b8c', fillOpacity: 0.05 };
+  }
+
+  function refresh(id) {
+    const layer = layers.get(id);
+    if (layer) layer.setStyle(styleFor(id));
+    updateStats();
+    if ($('sheet-history').classList.contains('open')) renderHistory();
+  }
+
+  function walkedIds() {
+    return Object.keys(walked).filter(id => layers.has(id));
+  }
+
+  function updateStats() {
+    const total = layers.size;
+    const ids = walkedIds();
+    const done = ids.length;
+    const pct = total ? Math.round(done / total * 1000) / 10 : 0;  // 0.1%刻み
+    const walkedArea = ids.reduce((s, id) => s + (areas.get(id) || 0), 0);
+    const areaPct = totalArea ? (walkedArea / totalArea * 100) : 0;
+    const days = new Set(ids.map(id => walked[id])).size;
+
+    $('done').textContent = done;
+    $('total').textContent = total;
+    $('pct').textContent = pct.toFixed(1) + '%';
+    $('barfill').style.width = (total ? done / total * 100 : 0) + '%';
+    $('bar').setAttribute('aria-valuenow', pct.toFixed(1));
+    $('sub').textContent = `面積では ${areaPct.toFixed(1)}%　／　歩いた日 ${days}日`;
+    updateTown(ids);
+  }
+
+  // 町丁目の範囲を点線の枠で表示する
+  function removeOutline() {
+    if (outline) outline.remove();
+    outline = null;
+    outlineTown = null;
+  }
+  function showOutline(town) {
+    if (outline && outlineTown === town) return;
+    removeOutline();
+    const f = townShapes.get(town);
+    if (!f) return;
+    outline = L.geoJSON(f, {
+      interactive: false,   // 枠の下のエリアをそのままタップできる
+      style: { color: '#e8590c', weight: 3.5, opacity: 0.95, dashArray: '8 6', fill: false }
+    }).addTo(map);
+    outlineTown = town;
+  }
+  function zoomToTown() {
+    if (!shownTown) return;
+    let bounds;
+    if (outline) {
+      bounds = outline.getBounds();
+    } else {
+      bounds = L.latLngBounds([]);
+      for (const id of townIds.get(shownTown)) bounds.extend(layers.get(id).getBounds());
+    }
+    if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
+  }
+  $('town').addEventListener('click', zoomToTown);
+  $('town').addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); zoomToTown(); }
+  });
+
+  // 最後に塗ったエリア（取り消した場合は、いちばん新しい日付のエリア）
+  function currentLastId(ids) {
+    if (lastId && walked[lastId] && layers.has(lastId)) return lastId;
+    let best = null;
+    for (const id of ids) {
+      if (best === null || walked[id] > walked[best] ||
+          (walked[id] === walked[best] && Number(id) > Number(best))) best = id;
+    }
+    return best;
+  }
+
+  // 最後に塗った町丁目の進み具合
+  function updateTown(ids) {
+    const box = $('town');
+    const id = currentLastId(ids);
+    const town = id && townOf.get(id);
+    if (!town) { box.hidden = true; shownTown = null; removeOutline(); return; }
+    shownTown = town;
+    showOutline(town);
+    const members = townIds.get(town);
+    let n = 0, a = 0, aTotal = 0;
+    for (const tid of members) {
+      const m = areas.get(tid) || 0;
+      aTotal += m;
+      if (walked[tid]) { n++; a += m; }
+    }
+    const pct = Math.round(n / members.length * 1000) / 10;
+    const areaPct = aTotal ? a / aTotal * 100 : 0;
+    box.hidden = false;
+    $('town-name').textContent = town;
+    $('town-pct').textContent = pct.toFixed(1) + '%';
+    $('town-fill').style.width = pct + '%';
+    $('town-bar').setAttribute('aria-valuenow', pct.toFixed(1));
+    $('town-sub').textContent = `最後に塗った町丁目　${n} / ${members.length} エリア　面積では ${areaPct.toFixed(1)}%`;
+  }
+
+  // ---- エリアのポップアップ ----
+  function openPopup(id, latlng) {
+    const wrap = document.createElement('div');
+    wrap.className = 'popup-body';
+
+    const h = document.createElement('h4');
+    h.textContent = `エリア ${id}`;
+    const meta = document.createElement('p');
+    meta.className = 'meta';
+    meta.textContent = `約 ${Math.round((areas.get(id) || 0)).toLocaleString()} m²`;
+
+    const label = document.createElement('label');
+    label.textContent = '歩いた日';
+    label.htmlFor = 'popup-date';
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.id = 'popup-date';
+    input.max = today();
+    input.value = walked[id] || '';
+    input.addEventListener('change', () => {
+      if (!input.value) { input.value = walked[id] || today(); return; }
+      walked[id] = input.value;
+      saveWalked();
+      refresh(id);
+      toast('日付を変更しました');
+    });
+
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.textContent = '塗りを取り消す';
+    undo.addEventListener('click', () => {
+      delete walked[id];
+      saveWalked();
+      refresh(id);
+      map.closePopup();
+      toast('取り消しました');
+    });
+
+    wrap.append(h, meta, label, input, undo);
+    L.DomEvent.disableClickPropagation(wrap);
+    L.popup({ closeButton: true, autoPanPadding: [20, 80] }).setLatLng(latlng).setContent(wrap).openOn(map);
+  }
+
+  function onAreaClick(id, latlng) {
+    if (!walked[id]) {
+      // 未塗りのエリア: 塗るだけ（吹き出しは出さない）
+      walked[id] = today();
+      lastId = id;
+      saveWalked();
+      refresh(id);
+      return;
+    }
+    // 塗り済みのエリア: 吹き出しで日付の確認・修正・取り消し
+    openPopup(id, latlng);
+  }
+
+  // ---- 履歴 ----
+  function renderHistory() {
+    const body = $('history-body');
+    body.textContent = '';
+    const byDate = {};
+    for (const id of walkedIds()) (byDate[walked[id]] ||= []).push(id);
+    const dates = Object.keys(byDate).sort().reverse();
+
+    if (!dates.length) {
+      const p = document.createElement('p');
+      p.className = 'empty';
+      p.textContent = 'まだ塗ったエリアがありません。地図上のエリアをタップすると、その日の日付で記録されます。';
+      body.append(p);
+      return;
+    }
+
+    for (const date of dates) {
+      const ids = byDate[date].sort((a, b) => Number(a) - Number(b));
+      const day = document.createElement('div');
+      day.className = 'day';
+      const h = document.createElement('h3');
+      h.textContent = formatDate(date);
+      const small = document.createElement('small');
+      small.textContent = `${ids.length}エリア`;
+      h.append(small);
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      for (const id of ids) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = id;
+        b.setAttribute('aria-label', `エリア ${id} を地図で見る`);
+        b.addEventListener('click', () => {
+          const layer = layers.get(id);
+          $('sheet-history').classList.remove('open');
+          map.fitBounds(layer.getBounds(), { maxZoom: 17, padding: [60, 60] });
+          openPopup(id, layer.getBounds().getCenter());
+        });
+        chips.append(b);
+      }
+      day.append(h, chips);
+      body.append(day);
+    }
+  }
+
+  function toggleSheet(name) {
+    for (const s of document.querySelectorAll('.sheet')) {
+      if (s.id === 'sheet-' + name) s.classList.toggle('open');
+      else s.classList.remove('open');
+    }
+    if (name === 'history') renderHistory();
+  }
+  $('btn-history').addEventListener('click', () => toggleSheet('history'));
+  $('btn-data').addEventListener('click', () => toggleSheet('data'));
+  for (const b of document.querySelectorAll('[data-close]')) {
+    b.addEventListener('click', () => b.closest('.sheet').classList.remove('open'));
+  }
+
+  // ---- 現在地 ----
+  let here;
+  $('btn-locate').addEventListener('click', () => {
+    toast('現在地を探しています…');
+    map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true });
+  });
+  map.on('locationfound', e => {
+    if (here) here.remove();
+    here = L.circleMarker(e.latlng, { radius: 8, color: '#fff', weight: 3, fillColor: '#d9480f', fillOpacity: 1, interactive: false }).addTo(map);
+  });
+  map.on('locationerror', () => toast('現在地を取得できませんでした'));
+
+  // ---- 書き出し / 読み込み ----
+  $('btn-export').addEventListener('click', () => {
+    const data = { app: 'fuchu-walk', version: 1, exportedAt: new Date().toISOString(), walked };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `fuchu-walk-${today()}.json`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  $('btn-import').addEventListener('click', () => $('file-import').click());
+  $('file-import').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const src = data && data.walked;
+      if (!src || typeof src !== 'object') throw new Error('形式が違います');
+      let n = 0;
+      for (const [id, date] of Object.entries(src)) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date)) { walked[id] = date; n++; }
+      }
+      saveWalked();
+      for (const id of layers.keys()) layers.get(id).setStyle(styleFor(id));
+      updateStats();
+      renderHistory();
+      toast(`${n}件を読み込みました`);
+    } catch (err) {
+      toast('読み込めませんでした。書き出したJSONを選んでください');
+    }
+  });
+
+  // ---- エリアデータの読み込み ----
+  fetch(GEOJSON_URL)
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      const group = L.geoJSON(data, {
+        style: f => styleFor(String(f.properties.id)),
+        onEachFeature: (f, layer) => {
+          const id = String(f.properties.id);
+          layers.set(id, layer);
+          areas.set(id, f.properties.area_m2 || 0);
+          totalArea += f.properties.area_m2 || 0;
+          const town = f.properties.town;
+          if (town) {
+            townOf.set(id, town);
+            if (!townIds.has(town)) townIds.set(town, []);
+            townIds.get(town).push(id);
+          }
+          layer.on('click', e => onAreaClick(id, e.latlng));
+        }
+      }).addTo(map);
+      map.fitBounds(group.getBounds());
+      updateStats();
+      $('loading').remove();
+
+      // 町丁目の範囲データ（なくても動く）
+      fetch('fuchu_towns.geojson')
+        .then(r => (r.ok ? r.json() : null))
+        .then(t => {
+          if (!t) return;
+          for (const f of t.features) townShapes.set(f.properties.name, f);
+          updateStats();
+        })
+        .catch(() => {});
+    })
+    .catch(() => {
+      $('loading').innerHTML =
+        'エリアのデータ <code>fuchu_areas.geojson</code> を読み込めませんでした。<br>' +
+        '同じフォルダに置いて、<code>python -m http.server</code> などで開いてください（ファイルを直接開くと読み込めません）。';
+    });
+})();
+</script>
+</body>
+</html>
